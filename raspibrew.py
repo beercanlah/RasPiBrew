@@ -21,13 +21,15 @@
 
 
 from multiprocessing import Process, Pipe, Queue, current_process
-from subprocess import Popen, PIPE, call
+#from subprocess import Popen, PIPE, call
 from datetime import datetime
-import web, time, random, json, serial, os
-from smbus import SMBus
+import web, time, random, serial, json, os
+#from smbus import SMBus
 #from pid import pid as PIDController
 from pid import pidpy as PIDController
 
+
+serial = serial.Serial("/dev/ttyACM2", baudrate=57600, timeout=2)
 
 class param:
     mode = "off"
@@ -48,7 +50,7 @@ def add_global_hook(parent_conn, statusQ):
     return _wrapper
             
 
-class raspibrew: 
+class raspibrew:
     def __init__(self):
                 
         self.mode = param.mode
@@ -88,7 +90,37 @@ class raspibrew:
          
         web.ctx.globals.parent_conn.send([self.mode, self.cycle_time, self.duty_cycle, self.set_point, \
                               self.k_param, self.i_param, self.d_param])  
-             
+
+
+
+    #def set_serial_port(self, port):
+     #       self.serial = serial.Serial(port,
+      #                                  baudrate=57600, timeout=0.1)
+
+    
+    
+def turn_pump_on():
+    serial.write("4,1;")
+    #print serial.readline()
+
+def turn_pump_off():
+    serial.write("4,0;")
+    #serial.readline()
+#turn_pump_on()    
+def turn_heater_on():
+    serial.write("6,1;")
+    #serial.readline()
+
+def turn_heater_off():
+    serial.write("6,0;")
+    #serial.readline()
+        
+def get_temperature():
+    serial.write("5;")	
+    out = serial.readline()
+    out = float(out[2:5])/10
+    #print out        
+    return out
  
 def getrandProc(conn):
     p = current_process()
@@ -108,7 +140,7 @@ def gettempProc(conn):
     while (True):
         t = time.time()
         time.sleep(.5) #.1+~.83 = ~1.33 seconds
-        num = tempdata()
+        num = get_temperature()
         elapsed = "%.2f" % (time.time() - t)
         conn.send([num, elapsed])
         
@@ -139,24 +171,25 @@ def heatProctest(cycle_time, duty_cycle, conn):
 def heatProc(cycle_time, duty_cycle, conn):
     p = current_process()
     print 'Starting:', p.name, p.pid
-    bus = SMBus(0)
-    bus.write_byte_data(0x26,0x00,0x00) #set I/0 to write
     while (True):
         while (conn.poll()): #get last
             cycle_time, duty_cycle = conn.recv()
         conn.send([cycle_time, duty_cycle])  
         if duty_cycle == 0:
-            bus.write_byte_data(0x26,0x09,0x00)
+            turn_heater_off()
             time.sleep(cycle_time)
+            #print 0
         elif duty_cycle == 100:
-            bus.write_byte_data(0x26,0x09,0x01)
+            turn_heater_on()
             time.sleep(cycle_time)
+            #print 100
         else:
             on_time, off_time = getonofftime(cycle_time, duty_cycle)
-            bus.write_byte_data(0x26,0x09,0x01)
+            turn_heater_on()
             time.sleep(on_time)
-            bus.write_byte_data(0x26,0x09,0x00)
+            turn_heater_off()
             time.sleep(off_time)
+            
         
         #y = datetime.now()
         #time_sec = y.second + y.microsecond/1000000.0
@@ -171,7 +204,7 @@ def tempControlProcTest(mode, cycle_time, duty_cycle, set_point, k_param, i_para
         #ptemp.daemon = True
         ptemp.start()   
         parent_conn_heat, child_conn_heat = Pipe()           
-        pheat = Process(name = "heatProctest", target=heatProctest, args=(cycle_time, duty_cycle, child_conn_heat))
+        pheat = Process(name = "heatProc", target=heatProc, args=(cycle_time, duty_cycle, child_conn_heat))
         #pheat.daemon = True
         pheat.start()  
         
@@ -192,7 +225,7 @@ def tempControlProcTest(mode, cycle_time, duty_cycle, set_point, k_param, i_para
 #controls 
 
 def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d_param, statusQ, conn):
-    
+        '''
         #initialize LCD
         ser = serial.Serial("/dev/ttyAMA0", 9600)
         ser.write("?BFF")
@@ -203,7 +236,7 @@ def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d
         ser.write("?y3?x00Heat: off      ")
         ser.write("?D70609090600000000") #define degree symbol
         time.sleep(.1) #wait 100msec
-            
+        '''    
         p = current_process()
         print 'Starting:', p.name, p.pid
         parent_conn_temp, child_conn_temp = Pipe()            
@@ -211,7 +244,7 @@ def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d
         ptemp.daemon = True
         ptemp.start()   
         parent_conn_heat, child_conn_heat = Pipe()           
-        pheat = Process(name = "heatProc", target=heatProc, args=(cycle_time, duty_cycle, child_conn_heat))
+        pheat = Process(name = "heatProc", target=heatProc , args=(cycle_time, duty_cycle, child_conn_heat))
         pheat.daemon = True
         pheat.start() 
         
@@ -222,7 +255,7 @@ def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d
             readytemp = False
             while parent_conn_temp.poll():
                 temp_C, elapsed = parent_conn_temp.recv() #non blocking receive    
-                temp_F = (9.0/5.0)*temp_C + 32
+                temp_F = temp_C 
                 
                 temp_F_ma_list.append(temp_F) 
                 
@@ -245,12 +278,12 @@ def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d
                 
                 temp_C_str = "%3.2f" % temp_C
                 temp_F_str = "%3.2f" % temp_F
-                ser.write("?y1?x05")
-                ser.write(temp_F_str)
+                #ser.write("?y1?x05")
+                #ser.write(temp_F_str)
                 #ser.write("?y1?x10")
-                ser.write("?7") #degree
+                #ser.write("?7") #degree
                 time.sleep(.005) #wait 5msec
-                ser.write("F   ") 
+                #ser.write("F   ") 
                 readytemp = True
             if readytemp == True:
                 if mode == "auto":
@@ -267,9 +300,9 @@ def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d
                 
             while parent_conn_heat.poll(): #non blocking receive
                 cycle_time, duty_cycle = parent_conn_heat.recv()
-                ser.write("?y2?x00Duty: ")
-                ser.write("%3.1f" % duty_cycle)
-                ser.write("%     ")    
+                #ser.write("?y2?x00Duty: ")
+                #ser.write("%3.1f" % duty_cycle)
+                #ser.write("%     ")    
                      
             readyPOST = False
             while conn.poll(): #POST settings
@@ -277,13 +310,13 @@ def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d
                 readyPOST = True
             if readyPOST == True:
                 if mode == "auto":
-                    ser.write("?y0?x00Auto Mode     ")
-                    ser.write("?y1?x00HLT:")
-                    ser.write("?y3?x00Set To: ")
-                    ser.write("%3.1f" % set_point)
-                    ser.write("?7") #degree
+                    #ser.write("?y0?x00Auto Mode     ")
+                    #ser.write("?y1?x00HLT:")
+                    #ser.write("?y3?x00Set To: ")
+                    #ser.write("%3.1f" % set_point)
+                    #ser.write("?7") #degree
                     time.sleep(.005) #wait 5msec
-                    ser.write("F   ") 
+                    #ser.write("F   ") 
                     print "auto selected"
                     #pid = PIDController.PID(cycle_time, k_param, i_param, d_param) #init pid
                     #duty_cycle = pid.calcPID(float(temp), set_point, True)
@@ -292,16 +325,16 @@ def tempControlProc(mode, cycle_time, duty_cycle, set_point, k_param, i_param, d
                     duty_cycle = pid.calcPID_reg4(temp_F_ma, set_point, True)
                     parent_conn_heat.send([cycle_time, duty_cycle])  
                 if mode == "manual": 
-                    ser.write("?y0?x00Manual Mode     ")
-                    ser.write("?y1?x00BK: ")
-                    ser.write("?y3?x00Heat: on       ")
+                    #ser.write("?y0?x00Manual Mode     ")
+                    #ser.write("?y1?x00BK: ")
+                    #ser.write("?y3?x00Heat: on       ")
                     print "manual selected"
                     duty_cycle = duty_cycle_temp
                     parent_conn_heat.send([cycle_time, duty_cycle])    
                 if mode == "off":
-                    ser.write("?y0?x00PID off      ")
-                    ser.write("?y1?x00HLT:")
-                    ser.write("?y3?x00Heat: off      ")
+                    #ser.write("?y0?x00PID off      ")
+                    #ser.write("?y1?x00HLT:")
+                    #ser.write("?y3?x00Heat: off      ")
                     print "off selected"
                     duty_cycle = 0
                     parent_conn_heat.send([cycle_time, duty_cycle])
@@ -365,8 +398,8 @@ def randomnum():
 def tempdata():
     #change 28-000002b2fa07 to your own temp sensor id
     #pipe = Popen(["cat","/sys/bus/w1/devices/w1_bus_master1/28-000002b2fa07/w1_slave"], stdout=PIPE)
-    pipe = Popen(["cat","/sys/bus/w1/devices/w1_bus_master1/28-0000037eb5c0/w1_slave"], stdout=PIPE)
-    result = pipe.communicate()[0]
+    #pipe = Popen(["cat","/sys/bus/w1/devices/w1_bus_master1/28-0000037eb5c0/w1_slave"], stdout=PIPE)
+    result = get_temperature()
     result_list = result.split("=")
     temp_C = float(result_list[-1])/1000 # temp in Celcius
     #temp_F = (9.0/5.0)*temp_C + 32
@@ -377,8 +410,8 @@ if __name__ == '__main__':
     
     os.chdir("/var/www")
      
-    call(["modprobe", "w1-gpio"])
-    call(["modprobe", "i2c-dev"])
+    #call(["modprobe", "w1-gpio"])
+    #call(["modprobe", "i2c-dev"])
     
     urls = ("/", "raspibrew",
         "/getrand", "getrand",
@@ -394,7 +427,7 @@ if __name__ == '__main__':
                                                               param.set_point, param.k_param, param.i_param, param.d_param, \
                                                               statusQ, child_conn))
     p.start()
-    
+    #get_temperature()
     app.add_processor(add_global_hook(parent_conn, statusQ))
      
     app.run()
